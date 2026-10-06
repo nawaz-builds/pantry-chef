@@ -4,7 +4,7 @@ import { login, getCurrentUser, logout, saveRecipe, getSavedRecipes, deleteSaved
 import Login from "./login";
 
 
-const API_URL = "http://localhost:8000/recipe"; 
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000"; 
 
 function App() {
   const [user, setUser] = useState(null);

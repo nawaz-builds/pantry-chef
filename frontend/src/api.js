@@ -50,7 +50,7 @@ export async function logout() {
 
 
 export async function saveRecipe(recipe) {
-  const response = await fetch("http://localhost:8000/recipes/save", {
+  const response = await fetch(`${API_URL}/recipes/save`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -71,7 +71,7 @@ export async function saveRecipe(recipe) {
 
 
 export async function getSavedRecipes() {
-  const response = await fetch("http://localhost:8000/recipes/saved", {
+  const response = await fetch(`${API_URL}/recipes/saved`, {
     method: "GET",
     credentials: "include",
   });
@@ -89,7 +89,7 @@ export async function getSavedRecipes() {
 
 export async function deleteSavedRecipe(recipeId) {
   const response = await fetch(
-    `http://localhost:8000/recipes/saved/${recipeId}`,
+    `${API_URL}/recipes/saved/${recipeId}`,
     {
       method: "DELETE",
       credentials: "include",
