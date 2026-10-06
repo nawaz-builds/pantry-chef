@@ -92,9 +92,14 @@ Do not include explanations, markdown, comments, or text outside the JSON.
 
 app = FastAPI()
 
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[FRONTEND_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -357,15 +362,17 @@ async def login(response: Response,
         db.add(session)
         await db.commit()
 
+        is_production = os.getenv("ENVIRONMENT") == "production"
+
         response.set_cookie(
             key="session_id",
             value=session_id,
             httponly=True,
-            secure=False,
-            samesite="lax",
+            secure=is_production,
+            samesite="none" if is_production else "lax",
             max_age=7 * 24 * 60 * 60,
-            path = "/",
-        )
+            path="/",
+        )   
 
         return {
             "message": "Login successful"
@@ -546,3 +553,9 @@ async def delete_saved_recipe(
         return {
             "message": "Recipe deleted successfully"
         }
+
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}    

@@ -27,6 +27,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
+    pool_pre_ping=True,   # test the connection before using it
+    pool_recycle=300,
 )
 
 SessionLocal = async_sessionmaker(

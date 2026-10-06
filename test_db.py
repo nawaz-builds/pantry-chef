@@ -10,4 +10,7 @@ async def main():
     print("Tables created successfully")
 
 
-asyncio.run(main())
+asyncio.run(
+    main(),
+    loop_factory=asyncio.SelectorEventLoop,
+)
