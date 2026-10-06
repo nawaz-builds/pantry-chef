@@ -79,7 +79,7 @@ function App() {
         formData.append("max_cooking_time", maxCookingTime);
       }
 
-      const response = await fetch(API_URL, {
+      const response = await fetch(`${API_URL}/recipe`, {
         method: "POST",
         credentials : "include", 
         body: formData,
