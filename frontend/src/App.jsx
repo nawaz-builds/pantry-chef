@@ -94,9 +94,17 @@ function App() {
       }
 
       const data = await response.json();
+
       console.log("RECIPE RESPONSE:", data);
 
       setRecipes(data.recipes || []);
+
+      if (!data.recipes || data.recipes.length === 0) {
+        setError(
+          data.message ||
+            "There aren't enough compatible ingredients to make a practical recipe."
+        );
+        }
     } catch (err) {
       console.error(err);
       setError(
@@ -293,12 +301,13 @@ function App() {
                   <h3>Upload your ingredients</h3>
 
                   <p>
-                    Take a clear photo of your fridge,
-                    pantry, or ingredients.
+                    Take a photo or choose an image
+                    <br />
+                    of your fridge, pantry, or ingredients.
                   </p>
 
                   <span className="upload-button">
-                    Choose image
+                    Upload image
                   </span>
                 </div>
               )}
@@ -309,7 +318,7 @@ function App() {
                 onChange={handleImageChange}
                 hidden
               />
-            </label>
+          </label>
           </div>
 
           <div className="panel">

@@ -66,4 +66,7 @@ class Recipe(BaseModel):
 
 class RecipeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    recipes: list[Recipe] = Field(min_length=1, max_length=2) 
+
+    recipes: list[Recipe] = Field(max_length=2)
+
+    message: str | None = None

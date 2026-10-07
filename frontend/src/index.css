@@ -1263,3 +1263,158 @@ footer {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* PantryChef image upload */
+
+.upload-area {
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.image-preview-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: inherit;
+  background: #f5f5f5;
+}
+
+.image-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.change-image {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  
+  padding: 10px 18px;
+  border-radius: 10px;
+  
+  background: rgba(20, 20, 20, 0.88);
+  color: white;
+  
+  font-size: 14px;
+  font-weight: 600;
+  
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.image-preview-wrapper:hover .change-image {
+  opacity: 1;
+}
+
+
+/* PantryChef image upload */
+
+.upload-area {
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.image-preview-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: inherit;
+  background: #f5f5f5;
+}
+
+.image-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.change-image {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  border-radius: 10px;
+  background: rgba(20, 20, 20, 0.88);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.image-preview-wrapper:hover .change-image {
+  opacity: 1;
+}
+
+
+
+.upload-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 360px;
+  padding: 40px 24px;
+}
+
+.upload-icon {
+  font-size: 42px;
+  margin-bottom: 16px;
+}
+
+.upload-content h3 {
+  margin: 0 0 8px;
+}
+
+.upload-content p {
+  margin: 0 0 24px;
+  color: #777;
+  line-height: 1.6;
+}
+
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 22px;
+  border-radius: 10px;
+  background: #171717;
+  color: white;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+
+
+@media (max-width: 700px) {
+  .image-preview-wrapper {
+    min-height: 280px;
+  }
+
+  .upload-content {
+    min-height: 280px;
+    padding: 32px 18px;
+  }
+
+  .change-image {
+    opacity: 1;
+    bottom: 14px;
+  }
+}
