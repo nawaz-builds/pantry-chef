@@ -16,313 +16,13 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import Response
 from fastapi import Cookie 
+from app.prompts import SYSTEM_PROMPT, build_user_prompt, validate_recipes, parse_blocked
 
 load_dotenv() 
 
 
 client = Groq(api_key=os.getenv("groq_api_key"))
 
-SYSTEM_PROMPT = """
-You are PantryChef, a practical recipe assistant.
-
-Your job is to determine what food can genuinely be prepared using the
-ingredients the user currently has.
-
-The detected ingredient list represents the user's actual available food.
-
-CORE PRODUCT RULE:
-PantryChef is a "cook with what you have" assistant.
-
-Do NOT behave like a normal recipe search engine.
-
-Do NOT design a recipe first and then add ingredients that the user does
-not have.
-
-A recipe is valid only when its core ingredients are available in the
-detected ingredient list.
-
---------------------------------------------------
-1. AVAILABLE INGREDIENTS
---------------------------------------------------
-
-The detected ingredient list is the user's actual food inventory.
-
-You MUST NOT assume that the user has an ingredient simply because it is
-common in a recipe.
-
-For example, if the detected ingredients are:
-
-["egg", "tomato", "onion"]
-
-you may use:
-
-- egg
-- tomato
-- onion
-
-You may NOT assume:
-
-- cheese
-- bread
-- rice
-- flour
-- chicken
-- potato
-- cream
-- butter
-
-unless they are explicitly detected.
-
-Ingredient synonyms are allowed only when they clearly refer to the same
-food.
-
-Examples:
-
-- tomato = tomatoes
-- potato = potatoes
-- egg = eggs
-- onion = onions
-
-Do not treat unrelated ingredients as synonyms.
-
---------------------------------------------------
-2. BASIC PANTRY STAPLES
---------------------------------------------------
-
-You may assume access to only these basic cooking staples:
-
-- water
-- salt
-- cooking oil
-- pepper
-- basic spices and seasonings
-
-These staples do NOT count as core ingredients.
-
-Do NOT assume access to:
-
-- flour
-- bread
-- rice
-- pasta
-- butter
-- cheese
-- milk
-- cream
-- sauces
-- vegetables
-- meat
-- eggs
-
-unless they are detected.
-
-Do not use pantry staples to construct an otherwise impossible recipe.
-
---------------------------------------------------
-3. RECIPE FEASIBILITY
---------------------------------------------------
-
-Before generating a recipe, determine whether the dish is genuinely
-practical using the available ingredients.
-
-A valid recipe must:
-
-- make culinary sense
-- use the available ingredients meaningfully
-- produce a recognizable and coherent dish
-- have realistic quantities
-- have realistic cooking steps
-- be practical for a normal home kitchen
-- not depend on unavailable core ingredients
-
-Do NOT generate bizarre combinations simply because the ingredients can
-technically be cooked together.
-
-Do NOT dump unrelated ingredients into one recipe.
-
-QUALITY IS MORE IMPORTANT THAN THE NUMBER OF RECIPES.
-
-One excellent recipe is better than two mediocre recipes.
-
---------------------------------------------------
-4. ZERO-RECIPE CONDITION
---------------------------------------------------
-
-If no genuinely practical recipe can be made using the available
-ingredients, return an empty recipes list.
-
-Example:
-
-{
-  "recipes": [],
-  "message": "There are not enough compatible ingredients to make a practical recipe."
-}
-
-An empty recipes list is a VALID and SUCCESSFUL response.
-
-NEVER invent a recipe simply to avoid returning an empty list.
-
-NEVER add unavailable core ingredients just to make a recipe possible.
-
---------------------------------------------------
-5. NUMBER OF RECIPES
---------------------------------------------------
-
-Return a maximum of 2 recipes.
-
-Generate 2 recipes only when there are genuinely different and practical
-recipes.
-
-If only 1 good recipe exists, return 1 recipe.
-
-If no good recipe exists, return an empty recipes list.
-
-Never create a second recipe just to reach a target number.
-
---------------------------------------------------
-6. INGREDIENT VALIDATION
---------------------------------------------------
-
-Every ingredient in the recipe's ingredients array must be either:
-
-1. Present in the detected ingredient list
-OR
-2. One of the allowed basic pantry staples.
-
-Do not include unavailable ingredients.
-
-The recipe must be possible to cook NOW using what the user has.
-
---------------------------------------------------
-7. AVAILABLE AND MISSING INGREDIENTS
---------------------------------------------------
-
-available_ingredients must contain only ingredients detected in the image.
-
-missing_ingredients must normally be an empty list.
-
-Do NOT use missing_ingredients to introduce core ingredients.
-
-For example:
-
-Detected:
-["egg", "tomato", "onion"]
-
-Good:
-
-available_ingredients:
-["egg", "tomato", "onion"]
-
-missing_ingredients:
-[]
-
-Bad:
-
-missing_ingredients:
-["bread", "cheese", "butter"]
-
---------------------------------------------------
-8. DIET
---------------------------------------------------
-
-The user's diet is a strict constraint.
-
-Respect it at all times.
-
-For vegan:
-
-- no meat
-- no fish
-- no eggs
-- no milk
-- no cheese
-- no other animal-derived ingredients
-
-For vegetarian:
-
-- no meat
-- no fish
-
-Never sacrifice dietary compliance for recipe quality.
-
---------------------------------------------------
-9. ALLERGIES
---------------------------------------------------
-
-Allergies are absolute constraints.
-
-Never use an ingredient listed in the user's allergies.
-
-If there is uncertainty about whether an ingredient conflicts with an allergy,
-do not use it.
-
-Allergy safety takes priority over every other instruction.
-
---------------------------------------------------
-10. FOODS TO AVOID
---------------------------------------------------
-
-Never intentionally use ingredients listed in the user's foods-to-avoid
-list.
-
---------------------------------------------------
-11. COOKING TIME
---------------------------------------------------
-
-If the user provides a maximum cooking time, every recipe must realistically
-be achievable within that time.
-
-Do not artificially reduce the cooking time just to satisfy the constraint.
-
---------------------------------------------------
-12. CUISINE
---------------------------------------------------
-
-Try to respect the requested cuisine when practical.
-
-However, cuisine preference must NEVER override:
-
-1. allergies
-2. diet
-3. available ingredients
-4. recipe feasibility
-5. cooking-time limits
-
-If the requested cuisine cannot reasonably be achieved with the available
-ingredients, prefer a practical recipe over a forced cuisine match.
-
---------------------------------------------------
-13. NO RECIPE DESIGN AROUND MISSING INGREDIENTS
---------------------------------------------------
-
-Do NOT create recipes that require a collection of missing ingredients.
-
-Do NOT say:
-
-"Make pizza, but you need flour, cheese, tomato sauce and yeast."
-
-That violates the PantryChef concept.
-
-PantryChef exists to discover what the user can make NOW.
-
---------------------------------------------------
-14. OUTPUT
---------------------------------------------------
-
-Return ONLY valid JSON matching the provided response schema.
-
-Do not return markdown.
-
-Do not return explanations outside the JSON.
-
-Do not return comments.
-
-Be honest.
-
-If a good recipe exists, return it.
-
-If no good recipe exists, return an empty recipes list.
-"""
 
 
 app = FastAPI()
@@ -370,73 +70,6 @@ async def get_authenticated_user(
 
 
 
-ALLOWED_PANTRY_STAPLES = {
-    "water",
-    "salt",
-    "oil",
-    "cooking oil",
-    "pepper",
-}
-
-
-def normalize_ingredient(name: str) -> str:
-    name = name.lower().strip()
-
-    aliases = {
-        "tomatoes": "tomato",
-        "potatoes": "potato",
-        "eggs": "egg",
-        "onions": "onion",
-        "carrots": "carrot",
-        "garlic cloves": "garlic",
-        "ginger root": "ginger",
-    }
-
-    return aliases.get(name, name)
-
-
-
-
-def validate_recipes(result: RecipeResponse, detected: DetectedIngredients):
-    detected_names = {
-        normalize_ingredient(item.name)
-        for item in detected.ingredients
-    }
-
-    valid_recipes = []
-
-    for recipe in result.recipes:
-        valid = True
-
-        for ingredient in recipe.ingredients:
-            ingredient_name = normalize_ingredient(ingredient.name)
-
-            if ingredient_name in ALLOWED_PANTRY_STAPLES:
-                continue
-
-            if ingredient_name not in detected_names:
-                print(
-                    f"REJECTED RECIPE '{recipe.name}': "
-                    f"unavailable ingredient '{ingredient.name}'"
-                )
-
-                valid = False
-                break
-
-        if valid:
-            valid_recipes.append(recipe)
-
-    result.recipes = valid_recipes
-
-    if not result.recipes:
-        result.message = (
-            "There are not enough compatible ingredients "
-            "to make a practical recipe."
-        )
-
-    return result
-
-
 
 
 @app.post("/recipe")
@@ -456,33 +89,6 @@ async def generate_recipe(
       return {"error" : "Not authenticated "} 
 
  
-  VISION_PROMPT = """
-    You are an ingredient detection system.
-
-    Analyze the uploaded image and identify only food ingredients
-    that are clearly visible.
-
-    Return ONLY valid json.
-
-    The json must have exactly this structure:
-
-    {
-    "ingredients": [
-        {
-        "name": "ingredient name",
-        "confidence": 0.95
-        }
-    ]
-    }
-
-    Do not generate recipes.
-    Do not infer ingredients.
-    Do not guess based only on color.
-    Prefer false negatives over false positives.
-    Ignore containers, packaging, labels and text.
-    Do not add ingredients that are not visibly present.
-    Each ingredient should appear only once.
-    """
         
     #Read Uploaded image
   image_bytes = await image.read() 
@@ -548,92 +154,50 @@ async def generate_recipe(
 
 
 
-  user_prompt = f"""
-    Determine what practical recipes can genuinely be made from the following
-    available ingredients.
-
-    AVAILABLE INGREDIENTS:
-    {[item.name for item in detected.ingredients]}
-
-    USER PREFERENCES:
-
-    Diet:
-    {diet}
-
-    Allergies:
-    {allergies}
-
-    Foods to avoid:
-    {avoid}
-
-    Cuisine:
-    {cuisine}
-
-    Maximum cooking time:
-    {max_cooking_time} minutes
-
-    IMPORTANT:
-
-    The available ingredient list is the user's actual food inventory.
-
-    Use the available ingredients as the foundation of the recipe.
-
-    Only water, salt, cooking oil, pepper, and basic seasonings may be assumed
-    as pantry staples.
-
-    Do NOT assume the user has other ingredients.
-
-    Do NOT add unavailable core ingredients.
-
-    Before generating each recipe, verify that it is genuinely practical and
-    recognizable using the available ingredients.
-
-    If no practical recipe can be made, return:
-
-    {{
-    "recipes": [],
-    "message": "There are not enough compatible ingredients to make a practical recipe."
-    }}
-
-    Do NOT invent a recipe just to avoid an empty response.
-
-    Generate at most 2 recipes.
-
-    Return only the JSON response matching the schema.
-    """
+  user_prompt = build_user_prompt(
+          ingredients=[item.name for item in detected.ingredients],
+          diet=diet, allergies=allergies, avoid=avoid,
+          cuisine=cuisine, max_cooking_time=max_cooking_time,
+      )
 
 
+
+  print("RECIPE USER PROMPT:")
+  print(user_prompt)
 
   response = client.chat.completions.create(
-      model="qwen/qwen3.8-27b",
-      messages=[ 
-          {
-              "role": "system",
-              "content": SYSTEM_PROMPT,
-          },
-          {
-              "role": "user",
-              "content": user_prompt,
-          },
-      ],
-      temperature=0.2,
-      max_tokens = 900, 
-      response_format={
-    "type": "json_schema",
-    "json_schema": {
-        "name": "recipe_response",
-        "strict": True,
-        "schema": RecipeResponse.model_json_schema()
-    }
-  },
-  )
- 
+        model="qwen/qwen3.8-27b",
+        messages=[
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        temperature=0.2,
+        max_tokens=900,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+            "name": "recipe_response",
+            "strict": True,
+            "schema": RecipeResponse.model_json_schema()
+        }
+        },
+    )
+  
+
 
   result = RecipeResponse.model_validate(
     json.loads(response.choices[0].message.content)
 )
 
-  result = validate_recipes(result, detected)
+  print("RAW RECIPE RESULT FROM GROQ:", result)
+
+  result = validate_recipes(result, detected, blocked_terms=parse_blocked(allergies, avoid))
 
   print("FINAL RECIPE RESULT:", result)
 
