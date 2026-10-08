@@ -192,14 +192,25 @@ function App() {
         {user.email}
       </div>
 
-      <button className="saved-nav-button" onClick={() => setShowSaved(true)}>
-        ♡ Saved Recipes
-      </button>
+      <div className="nav-actions">
+        <button
+          className="saved-nav-button"
+          onClick={() => setShowSaved(true)}
+          aria-label="Saved Recipes"
+        >
+          <span className="nav-icon">♡</span>
+          <span className="nav-label">Saved Recipes</span>
+        </button>
 
-      <button className="logout-button" onClick={handleLogout}>
-      <span>↪</span>
-      Logout
-    </button>
+        <button
+          className="logout-button"
+          onClick={handleLogout}
+          aria-label="Logout"
+        >
+          <span className="nav-icon">↪</span>
+          <span className="nav-label">Logout</span>
+        </button>
+      </div>
     </header>
 
       <main className="container">

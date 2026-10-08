@@ -1,31 +1,3 @@
-"""
-Drop-in replacements for the prompt + validation parts of app.py.
-
-Usage in app.py:
-
-    from pantrychef_prompts import SYSTEM_PROMPT, build_user_prompt, validate_recipes
-
-    user_prompt = build_user_prompt(
-        ingredients=[item.name for item in detected.ingredients],
-        diet=diet, allergies=allergies, avoid=avoid,
-        cuisine=cuisine, max_cooking_time=max_cooking_time,
-    )
-
-    response = client.chat.completions.create(
-        model="qwen/qwen3.8-27b",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.4,
-        max_tokens=2000,          # was 900; reasoning models need headroom
-        response_format={...},    # unchanged
-    )
-
-    result = RecipeResponse.model_validate(json.loads(response.choices[0].message.content))
-    result = validate_recipes(result, detected, blocked_terms=parse_blocked(allergies, avoid))
-"""
-
 import re
 
 # ---------------------------------------------------------------------------

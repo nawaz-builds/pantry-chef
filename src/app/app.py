@@ -162,8 +162,6 @@ async def generate_recipe(
 
 
 
-  print("RECIPE USER PROMPT:")
-  print(user_prompt)
 
   response = client.chat.completions.create(
         model="qwen/qwen3.8-27b",
