@@ -1,395 +1,187 @@
-# 🍳 PantryChef
+# PantryChef
 
-### Cook with what you already have.
+**Photo of your ingredients in, validated recipes out.** A full-stack app that treats LLM output as untrusted input and verifies it on the server before the user sees it.
 
-PantryChef is an AI-powered cooking app built around a simple idea:
+[Live demo](https://pentry-ch.netlify.app/) · [API docs](#api) · [Security model](#security-model) · [Test it](#security-testing)
 
-> **Don't search for a recipe. Start with what's already in your kitchen.**
+> The backend is on a free tier, so the first request after idle can take 30-60 s while it cold-starts.
 
-Upload a photo of your ingredients, choose your preferences, and PantryChef tries to turn that inventory into practical recipes — while respecting dietary preferences, allergies, ingredients you want to avoid, cuisine, and cooking time.
-
-It also has user accounts and saved recipes, so this isn't just an AI demo. It's a full-stack application with a real backend, database, authentication, API, and deployed frontend.
-
----
-
-## 🌐 Try it
-
-**Live app:**  
-https://pentry-ch.netlify.app/
-
-The backend is deployed separately and serves the application's API.
+<!-- TODO: add a 10-15 s GIF or 2-3 screenshots here: upload -> detected ingredients -> recipe.
+     ![PantryChef demo](docs/demo.gif) -->
 
 ---
 
-## 🧠 What makes PantryChef different?
+## The problem
 
-Most AI recipe generators work roughly like this:
+Most "AI recipe" apps take a dish name and let a model improvise. Nothing stops the model from calling for ingredients you don't own, or, worse, ignoring an allergy you declared.
 
-```text
-"Give me a recipe for chicken pasta"
-              ↓
-          AI generates
-              ↓
-          Recipe
+PantryChef inverts the flow: the user's **actual inventory** is the input, and the model's output is checked against it afterwards.
 
-PantryChef starts from the opposite direction:
+## How it works
 
-             Your kitchen
-                  │
-                  ▼
-          📷 Ingredient photo
-                  │
-                  ▼
-        Ingredient detection
-                  │
-                  ▼
-       Available food inventory
-                  │
-          ┌───────┴────────┐
-          ▼                ▼
-     User preferences   Restrictions
-     • cuisine          • allergies
-     • time             • avoid
-     • diet
-          └───────┬────────┘
-                  ▼
-             AI recipe
-                  │
-                  ▼
-       Server-side validation
-                  │
-                  ▼
-          🍳 Practical recipe
+```mermaid
+sequenceDiagram
+    participant B as Browser (React)
+    participant A as FastAPI
+    participant V as Vision LLM
+    participant G as Recipe LLM
+    B->>A: POST /recipe (image + preferences, session cookie)
+    A->>A: Authenticate session
+    A->>V: Image, temperature 0, JSON mode
+    V-->>A: {ingredients: [{name, confidence}]}
+    A->>A: Validate against DetectedIngredients (Pydantic)
+    A->>G: Inventory + diet/cuisine/time/restrictions
+    G-->>A: Recipes constrained by a strict JSON schema
+    A->>A: Validate against inventory + blocked terms
+    A-->>B: Verified recipes
+```
 
-The important part is that the AI is not supposed to freely invent a recipe and then pretend the ingredients exist.
+Three stages, each with a different trust level:
 
-The available ingredients are treated as the user's actual inventory.
+1. **Detection.** A vision model lists visible ingredients with confidence scores. The prompt is biased toward false negatives (it's better to miss a lemon than to invent one), and the response must parse into a Pydantic model or the request fails.
+2. **Generation.** A second call receives only the detected inventory plus preferences. Output is constrained with `response_format: json_schema` (`strict: true`), generated directly from the Pydantic `RecipeResponse` model so the schema and the validator can't drift apart.
+3. **Verification.** `validate_recipes()` checks the parsed result against the detected inventory and the user's blocked terms (`parse_blocked(allergies, avoid)`). The model is a proposer; the server decides what gets returned.
 
-✨ Features
-📷 Ingredient-based cooking
+<!-- TODO: add 3-5 lines on what validate_recipes() actually does (matching strategy, how pantry
+     staples are handled, what happens on failure: reject / retry / strip). This is the core of the
+     project; it deserves a concrete example. -->
 
-Upload an image of your fridge, pantry, or ingredients.
+## Design decisions
 
-PantryChef uses the detected ingredients as the starting point for recipe generation.
+| Decision | Why |
+|---|---|
+| Two LLM calls instead of one | Detection and generation fail differently. Splitting them makes each step testable and lets the inventory become an explicit, inspectable data structure. |
+| Temperature 0 for detection, 0.2 for generation | Detection should be deterministic; generation gets just enough variety. |
+| Schema derived from Pydantic models | One source of truth for the model's output contract and the server's validation. |
+| Server-side sessions (opaque 256-bit token in the DB) instead of JWTs | Sessions can be revoked instantly on logout and expire server-side; nothing sensitive lives in the token. |
+| `HttpOnly` cookie, `Secure` + `SameSite=None` in production | The token is unreachable from JavaScript. `None` is required because frontend and API are on different sites (Netlify / Render). |
+| Argon2 password hashing (`argon2-cffi`) | Memory-hard, current best practice. |
+| Every saved-recipe query is scoped by `user_id` from the session | The client never supplies the owner, which removes the usual IDOR path. |
+| CORS pinned to a single configured origin with credentials | No wildcard origins alongside cookies. |
 
-🤖 AI recipe generation
+## Stack
 
-Recipes are generated based on the ingredients actually available rather than simply searching for a generic recipe.
+| Layer | Tech |
+|---|---|
+| Frontend | React, Vite (Netlify) |
+| Backend | Python, FastAPI, Pydantic, SQLAlchemy (async) (Render) |
+| Database | PostgreSQL |
+| AI | Groq API, Qwen models (vision + text) |
+| Tooling | uv |
 
-🥗 Dietary preferences
+## API
 
-Recipes can take dietary preferences into account.
+Interactive docs are served at `/docs` (Swagger UI) when running locally.
 
-⚠️ Allergies
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/auth/register` | no | Create account (JSON: email, password) |
+| `POST` | `/auth/login` | no | Start session, sets `session_id` cookie (form data) |
+| `GET` | `/auth/me` | cookie | Current user |
+| `POST` | `/auth/logout` | cookie | Delete session server-side, clear cookie |
+| `POST` | `/recipe` | cookie | Multipart: `image`, `diet`, `cuisine`, `allergies`, `avoid`, `max_cooking_time` |
+| `POST` | `/recipes/save` | cookie | Save a recipe |
+| `GET` | `/recipes/saved` | cookie | List the current user's saved recipes |
+| `DELETE` | `/recipes/saved/{id}` | cookie | Delete one of the current user's recipes |
+| `GET` | `/health` | no | Liveness check |
 
-Users can specify ingredients they are allergic to.
+## Run locally
 
-🚫 Ingredients to avoid
+**Requirements:** Python (see `.python-version`), [uv](https://docs.astral.sh/uv/), Node.js, PostgreSQL, a [Groq API key](https://console.groq.com/).
 
-Users can explicitly tell PantryChef what they don't want included.
+```bash
+git clone https://github.com/nawaz-builds/pantry-chef.git
+cd pantry-chef
 
-⏱️ Cooking time
-
-Recipes can be constrained by the amount of time the user wants to spend cooking.
-
-🌎 Cuisine preferences
-
-Users can choose the type of cuisine they want.
-
-🔐 Authentication
-
-PantryChef has user registration and login with session-based authentication.
-
-Authentication uses HTTP cookies rather than storing authentication tokens in browser JavaScript.
-
-💾 Saved recipes
-
-Users can save generated recipes and access them later.
-
-📱 Responsive UI
-
-The frontend is designed to work on both desktop and mobile screens.
-
-🏗️ Tech Stack
-Frontend
-React
-Vite
-CSS
-Backend
-Python
-FastAPI
-Pydantic
-SQLAlchemy
-PostgreSQL
-AI
-Groq API
-Qwen model
-Deployment
-Netlify — frontend
-Render — backend
-Python tooling
-uv
-🔥 Architecture
-                    ┌──────────────────────┐
-                    │       Browser        │
-                    │   React + Vite UI    │
-                    └──────────┬───────────┘
-                               │
-                               │ HTTP / JSON
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │      FastAPI         │
-                    │      Backend         │
-                    └──────────┬───────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
-        Authentication      Recipe API      Saved Recipes
-              │                │                │
-              │                ▼                │
-              │           Groq / Qwen           │
-              │                │                │
-              │                ▼                │
-              │        Pydantic validation      │
-              │                │                │
-              └────────────────┼────────────────┘
-                               │
-                               ▼
-                         PostgreSQL
-🔐 A small security challenge
-
-This project is also being used as a playground for learning web security.
-
-If you're learning:
-
-Web security
-Pentesting
-API security
-Authentication
-Authorization
-Burp Suite
-OWASP Top 10
-IDOR / access-control testing
-
-You're welcome to test PantryChef.
-
-I'm especially interested in finding things I missed.
-
-Things worth looking at
-Authentication
-     │
-     ├── Registration
-     ├── Login
-     ├── Logout
-     └── Session cookies
-
-Authorization
-     │
-     ├── User → own recipes
-     ├── Saved recipes
-     └── Resource access
-
-API
-     │
-     ├── Input validation
-     ├── Request manipulation
-     ├── Unexpected payloads
-     └── Error handling
-
-File uploads
-     │
-     └── Image upload handling
-
-Database
-     │
-     └── User / recipe isolation
-Testing rules
-
-You have permission to test the PantryChef application itself.
-
-Please don't:
-
-DDoS or intentionally overload the service
-Destroy the application
-Delete or modify another user's data
-Access another user's private information
-Attack Render, Netlify, PostgreSQL infrastructure, or other third-party infrastructure
-
-If you find something interesting, send me:
-
-What you found
-↓
-How you reproduced it
-↓
-What you expected to happen
-↓
-What actually happened
-↓
-Why you think it matters
-
-Screenshots, requests/responses, or a short PoC are useful.
-
-This is a personal project, not a paid bug bounty program.
-
-🚀 Running PantryChef locally
-Requirements
-
-You'll need:
-
-Python
-uv
-Node.js
-PostgreSQL
-A Groq API key
-1. Clone the repository
-git clone https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
-
-cd pentry-chef
-2. Install backend dependencies
+# Backend
+cp .env.example .env        # then fill in the values below
 uv sync
-3. Configure environment variables
+uv run python main.py       # API on the configured port; docs at /docs
 
-Create a .env file in the project root.
-
-Example:
-
-DATABASE_URL=your_database_url
-GROQ_API_KEY=your_groq_api_key
-FRONTEND_URL=http://localhost:5173
-
-Never commit your real .env file.
-
-Use .env.example for values that other developers need to configure.
-
-4. Start the backend
-uv run python main.py
-
-The API will be available locally through FastAPI.
-
-You can also open:
-
-/docs
-
-to explore the API through Swagger UI.
-
-5. Start the frontend
-
-Open another terminal:
-
+# Frontend (second terminal)
 cd frontend
 npm install
-npm run dev
+npm run dev                 # Vite dev server on http://localhost:5173
+```
 
-Then open the local Vite URL shown in your terminal.
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Async SQLAlchemy URL for PostgreSQL |
+| `GROQ_API_KEY` | Groq API key |
+| `FRONTEND_URL` | Allowed CORS origin (default `http://localhost:5173`) |
+| `ENVIRONMENT` | Set to `production` to enable `Secure` / `SameSite=None` cookies |
 
-📁 Project structure
-pentry-chef/
-│
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── api.js
-│   │   ├── index.css
-│   │   ├── login.jsx
-│   │   └── main.jsx
-│   │
-│   ├── package.json
-│   └── ...
-│
+## Project structure
+
+```
+pantry-chef/
 ├── src/
 │   └── app/
 │       ├── __init__.py
-│       ├── app.py
-│       ├── database.py
-│       ├── schemas.py
-│       └── security.py
-│
-├── main.py
-├── pyproject.toml
+│       ├── app.py          # FastAPI routes: auth, recipe pipeline, saved recipes
+│       ├── prompts.py      # Prompts, validate_recipes(), parse_blocked()
+│       ├── schemas.py      # Pydantic models (also generate the LLM JSON schema)
+│       ├── database.py     # SQLAlchemy models (User, Session, SavedRecipe), async session
+│       └── security.py     # Argon2 hash/verify
+├── frontend/               # React + Vite client
+│   ├── public/
+│   ├── src/
+│   │   ├── api.js          # API client (fetch wrapper, credentials: include)
+│   │   ├── App.jsx
+│   │   ├── login.jsx
+│   │   ├── main.jsx
+│   │   └── index.css
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js
+│   └── .env.example        # Frontend env (API base URL)
+├── main.py                 # Backend entry point
+├── test_db.py              # Database connectivity check
+├── pyproject.toml          # Python dependencies (managed with uv)
 ├── uv.lock
-├── .env.example
-└── .gitignore
-🧩 API
+├── .python-version
+├── .env.example            # Backend env template
+└── README.md
+```
 
-The backend exposes endpoints for things such as:
+## Security model
 
-/auth/register
-/auth/login
-/auth/logout
-/auth/me
+**Threat model.** Untrusted users, an untrusted LLM, and untrusted image content. The assets are user accounts, saved recipes, and the LLM API quota.
 
-/recipe
+**Implemented**
+- Argon2 password hashing; opaque random session tokens stored server-side with expiry
+- `HttpOnly` cookies; CORS restricted to one origin
+- Ownership-scoped queries on saved recipes
+- Schema-validated LLM input and output; server-side check of recipes against inventory and blocked terms
 
-/saved-recipes
+**Known limitations** (tracked openly; see the roadmap)
+- No rate limiting on auth or on the LLM-backed `/recipe` endpoint
+- No explicit CSRF defence beyond CORS (cross-site cookies are required by the deployment topology)
+- Upload size and content type are not yet strictly enforced
+- Text visible in an uploaded image reaches the vision model, so prompt injection via image is possible; the detection output is schema-validated but not content-filtered
+- **Allergy handling is best-effort and not a medical safety guarantee.** Always check ingredients yourself.
 
-The exact API contract can be explored through the FastAPI Swagger documentation at:
+## Roadmap
 
-/docs
+- [ ] Rate limiting (per-user and per-IP), upload size and magic-byte validation
+- [ ] CSRF protection (Origin check or double-submit token)
+- [ ] Return proper HTTP status codes (`401`/`404`) instead of `200` + `{"error": ...}`
+- [ ] Extract session lookup into a single FastAPI dependency
+- [ ] Non-blocking LLM calls (async Groq client or threadpool)
+- [ ] Tests for `validate_recipes()` and for cross-user access on saved recipes
+- [ ] CI (lint + tests)
+- [ ] Evaluation set for ingredient detection accuracy
 
-when running the backend.
+## Security testing
 
-🛡️ Security-minded design
+You may test the deployed app: auth, session handling, authorization (IDOR), input validation, and upload handling.
 
-One of the things I'm intentionally experimenting with in this project is the difference between:
+**Please don't:** run DoS or load tests, access or modify other users' data, or attack the hosting infrastructure (Render, Netlify, the database host). Use your own test accounts.
 
-"The AI said this is okay."
+**Report** (via [GitHub issue](https://github.com/nawaz-builds/pantry-chef/issues) or `<contact email>`): what you found, steps to reproduce, expected vs. actual behaviour, and impact. This is a personal project, not a paid bounty, but good reports get credited here.
 
-and
+## License
 
-"The server verified that this is okay."
+<!-- TODO: add a LICENSE file (MIT is a common choice) and name it here. -->
 
-For example, recipe generation is followed by server-side validation of the generated recipe against the detected ingredient inventory.
-
-That means the application doesn't have to blindly trust the model's output.
-
-This project is still evolving, so the security model should not be considered production-grade.
-
-That's partly why I'm opening it up for testing.
-
-📌 Current status
-
-PantryChef is an active personal project.
-
-The core application is working and deployed, but there are still things I want to improve:
-
-Recipe generation quality
-Ingredient detection accuracy
-Security hardening
-API validation
-UI/UX
-Error handling
-Overall reliability
-
-If you find something broken, weird, insecure, or just badly designed, I'd rather know about it.
-
-🧪 Why I built this
-
-This started as a simple idea:
-
-What can I actually cook with the stuff sitting in my kitchen?
-
-It turned into a much bigger experiment involving:
-
-AI APIs
-Computer vision / ingredient detection
-Prompt engineering
-Structured AI output
-Pydantic validation
-FastAPI
-Async database operations
-Session authentication
-React
-API integration
-Deployment
-Web security
-
-So PantryChef ended up being less about recipes and more about building an actual AI-powered full-stack application from scratch.
-
-👨‍💻 Built by
-
-Nawaz
-
-Personal project • Full-stack • AI • Web Security
-
+Built by [Nawaz](https://github.com/nawaz-builds).
