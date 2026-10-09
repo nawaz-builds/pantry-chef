@@ -178,9 +178,10 @@ You may test the deployed app: auth, session handling, authorization (IDOR), inp
 
 **Please don't:** run DoS or load tests, access or modify other users' data, or attack the hosting infrastructure (Render, Netlify, the database host). Use your own test accounts.
 
-**Report** (via [GitHub issue](https://github.com/nawaz-builds/pantry-chef/issues) or `<contact email>`): what you found, steps to reproduce, expected vs. actual behaviour, and impact. This is a personal project, not a paid bounty, but good reports get credited here.
+**Report** (via [GitHub issue](https://github.com/nawaz-builds/pantry-chef/issues) or `<nawazlaskarjnv@gmail.com>`): what you found, steps to reproduce, expected vs. actual behaviour, and impact. This is a personal project, not a paid bounty, but good reports get credited here.
 
-## License
+## License 
+MIT
 
 <!-- TODO: add a LICENSE file (MIT is a common choice) and name it here. -->
 
