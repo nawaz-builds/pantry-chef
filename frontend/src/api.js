@@ -4,16 +4,26 @@ export async function login(email, password) {
   const response = await fetch(`${API_URL}/auth/login`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
     },
     credentials: "include",
-    body: new URLSearchParams({
+    body: JSON.stringify({
       email,
       password,
     }),
   });
 
-  return response.json();
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      typeof data.detail === "string"
+        ? data.detail
+        : "Login failed. Please check your credentials."
+    );
+  }
+
+  return data;
 }
 
 export async function register(email, password) {

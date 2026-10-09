@@ -1,9 +1,15 @@
-from fastapi import FastAPI , HTTPException
+from fastapi import FastAPI , HTTPException, Depends
 from fastapi import File, UploadFile, Form 
-from src.app.schemas import RecipeRequest, RecipeIngredient, Recipe, RecipeResponse , DetectedIngredients, UserRegister
+from src.app.schemas import( RecipeRequest,
+                             RecipeIngredient,
+                             Recipe,
+                             RecipeResponse ,
+                             DetectedIngredients,
+                             UserRegister,
+                             UserLogin  )
 from dotenv import load_dotenv 
 import os 
-from groq import Groq 
+from groq import Groq, APIError, RateLimitError
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio  
 import json
@@ -18,11 +24,14 @@ from fastapi import Response
 from fastapi import Cookie 
 from sqlalchemy.exc import IntegrityError
 from app.prompts import SYSTEM_PROMPT, build_user_prompt, validate_recipes, parse_blocked
+import logging
 
 load_dotenv() 
 
+logger = logging.getLogger(__name__) 
 
-client = Groq(api_key=os.getenv("groq_api_key"))
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
 
@@ -45,30 +54,31 @@ app.add_middleware(
 
 
 async def get_authenticated_user(
-    session_id: str | None = Cookie(default=None)
-):
+    session_id: str | None = Cookie(default=None)) -> User:
     if not session_id:
-        return None
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     async with SessionLocal() as db:
-        result = await db.execute(
+        session = (await db.execute(
             select(Session).where(Session.id == session_id)
-        )
-
-        session = result.scalar_one_or_none()
+        )).scalar_one_or_none()
 
         if not session:
-            return None
+            raise HTTPException(status_code=401, detail="Invalid session")
 
         if session.expires_at <= datetime.now(timezone.utc):
-            return None
+            await db.delete(session)          # clean up the dead row
+            await db.commit()
+            raise HTTPException(status_code=401, detail="Session expired")
 
-        result = await db.execute(
+        user = (await db.execute(
             select(User).where(User.id == session.user_id)
-        )
+        )).scalar_one_or_none()
 
-        return result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid session")
 
+        return user
 
 
 
@@ -87,7 +97,10 @@ async def generate_recipe(
   user = await get_authenticated_user(session_id) 
 
   if not user :
-      return {"error" : "Not authenticated "} 
+      raise HTTPException(
+          status_code=401,
+          detail="unauthorized"
+      )
 
  
         
@@ -95,63 +108,70 @@ async def generate_recipe(
   image_bytes = await image.read() 
   base64_image = base64.b64encode(image_bytes).decode("utf-8")
  
-    
-  vision_response = client.chat.completions.create(
-    model="qwen/qwen3.8-27b",
-    messages=[
-        {
-            "role": "system",
-            "content": """
-    You are an ingredient detection system.
-
-    You MUST return the answer as valid json.
-
-    The json must have exactly this structure:
-
-    {
-        "ingredients": [
+  try:   
+    vision_response = await asyncio.to_thread( client.chat.completions.create,
+        model="qwen/qwen3.8-27b",
+        messages=[
             {
-                "name": "ingredient name",
-                "confidence": 0.95
-            }
-        ]
-    }
+                "role": "system",
+                "content": """
+        You are an ingredient detection system.
 
-    Identify ONLY food ingredients that are clearly visible in the image.
+        You MUST return the answer as valid json.
 
-    Do not generate recipes.
-    Do not infer ingredients.
-    Do not guess based only on color.
-    Prefer false negatives over false positives.
-    Ignore containers, packaging, labels and text.
-    Do not add ingredients that are not visibly present.
-    Each ingredient should appear only once.
-    """
-        },
+        The json must have exactly this structure:
+
         {
-            "role": "user",
-            "content": [
+            "ingredients": [
                 {
-                    "type": "text",
-                    "text": "Analyze this image and return the detected ingredients as json."
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{image.content_type};base64,{base64_image}"
-                    }
+                    "name": "ingredient name",
+                    "confidence": 0.95
                 }
             ]
         }
-    ],
-    temperature=0,
-    response_format={"type": "json_object"}
-)
+
+        Identify ONLY food ingredients that are clearly visible in the image.
+
+        Do not generate recipes.
+        Do not infer ingredients.
+        Do not guess based only on color.
+        Prefer false negatives over false positives.
+        Ignore containers, packaging, labels and text.
+        Do not add ingredients that are not visibly present.
+        Each ingredient should appear only once.
+        """
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Analyze this image and return the detected ingredients as json."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{image.content_type};base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        temperature=0,
+        response_format={"type": "json_object"}
+    )
+  except RateLimitError :
+      raise HTTPException(
+          status_code=502,
+          detail="AI service is busy , Please try again"
+      )
+  except APIError :
+      logger.exception("Groq request failed")
+      raise HTTPException(status_code=502, detail="AI service unavailable")
     
   detected = DetectedIngredients.model_validate(
     json.loads(vision_response.choices[0].message.content)
 )
-  print("DETECTED INGREDIENTS:", detected)
 
 
 
@@ -163,42 +183,47 @@ async def generate_recipe(
 
 
 
-
-  response = client.chat.completions.create(
-        model="qwen/qwen3.8-27b",
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
+  try:
+    response = await asyncio.to_thread( client.chat.completions.create,
+            model="qwen/qwen3.8-27b",
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            temperature=0.2,
+            max_tokens=900,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                "name": "recipe_response",
+                "strict": True,
+                "schema": RecipeResponse.model_json_schema()
+            }
             },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
-        temperature=0.2,
-        max_tokens=900,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {
-            "name": "recipe_response",
-            "strict": True,
-            "schema": RecipeResponse.model_json_schema()
-        }
-        },
-    )
-  
-
+        )
+  except RateLimitError :
+      raise HTTPException(
+          status_code=502,
+          detail="AI service is busy , Please try again"
+      )
+  except APIError :
+      logger.exception("Groq request failed")
+      raise HTTPException(status_code=502, detail="AI service unavailable")
+    
 
   result = RecipeResponse.model_validate(
     json.loads(response.choices[0].message.content)
 )
 
-  print("RAW RECIPE RESULT FROM GROQ:", result)
 
   result = validate_recipes(result, detected, blocked_terms=parse_blocked(allergies, avoid))
 
-  print("FINAL RECIPE RESULT:", result)
 
   return result
 
@@ -256,9 +281,12 @@ async def register(data: UserRegister):
 
 @app.post("/auth/login")
 async def login(response: Response,
-                email: str = Form(...),
-                password : str = Form(...)
+                data: UserLogin
                 ):
+
+    email = str(data.email).lower()
+    password = str(data.password)
+
     async with SessionLocal() as db:
         result = await db.execute(
             select(User).where(User.email == email)
@@ -267,10 +295,16 @@ async def login(response: Response,
         user = result.scalar_one_or_none()
 
         if not user:
-            return {"error": "Invalid email or password"}
+            raise HTTPException(
+                status_code=404,
+                detail="Invalid email or password"
+            )
 
         if not verify_password(password, user.password_hash):
-            return {"error": "Invalid email or password"}
+            raise HTTPException (
+                status_code=401,
+                detail="Invalid email or password"
+            )
 
         session_id = secrets.token_urlsafe(32)
 
@@ -303,7 +337,10 @@ async def login(response: Response,
 @app.get("/auth/me")
 async def get_current_user(session_id: str | None = Cookie(default=None)):
     if not session_id:
-        return {"error": "Not authenticated"}
+        raise HTTPException (
+            status_code=401,
+            detail="Not authenticated"
+        )
 
     async with SessionLocal() as db:
         result = await db.execute(
@@ -313,10 +350,16 @@ async def get_current_user(session_id: str | None = Cookie(default=None)):
         session = result.scalar_one_or_none()
 
         if not session:
-            return {"error": "Invalid session"}
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid session"
+            )
 
         if session.expires_at <= datetime.now(timezone.utc):
-            return {"error": "Session expired"}
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid session"
+            )
 
         result = await db.execute(
             select(User).where(User.id == session.user_id)
@@ -325,7 +368,10 @@ async def get_current_user(session_id: str | None = Cookie(default=None)):
         user = result.scalar_one_or_none()
 
         if not user:
-            return {"error": "User not found"}
+            raise HTTPException(
+                status_code=404,
+                detail="Not found"
+            )
 
         return {
             "id": user.id,
@@ -363,62 +409,26 @@ async def logout(
 
 
 @app.post("/recipes/save")
-async def save_recipe(
-    recipe_data: dict,
-    session_id: str | None = Cookie(default=None)
-):
-    if not session_id:
-        return {"error": "Not authenticated"}
-
+async def save_recipe(recipe_data: dict, user: User = Depends(get_authenticated_user)): 
     async with SessionLocal() as db:
-
-        result = await db.execute(
-            select(Session).where(Session.id == session_id)
-        )
-
-        session = result.scalar_one_or_none()
-
-        if not session:
-            return {"error": "Invalid session"}
-
-        new_recipe = SavedRecipe(
-            user_id=session.user_id,
-            recipe_data=recipe_data
-        )
-
+        new_recipe = SavedRecipe(user_id=user.id, recipe_data=recipe_data)
         db.add(new_recipe)
-
         await db.commit()
         await db.refresh(new_recipe)
-
-        return {
-            "message": "Recipe saved successfully",
-            "recipe_id": new_recipe.id
-        }
+        return {"message": "Recipe saved successfully", "recipe_id": new_recipe.id}
 
 
 
 @app.get("/recipes/saved")
 async def get_saved_recipes(
-    session_id: str | None = Cookie(default=None)
+    user : User = Depends(get_authenticated_user)
 ):
-    if not session_id:
-        return {"error": "Not authenticated"}
 
     async with SessionLocal() as db:
 
         result = await db.execute(
-            select(Session).where(Session.id == session_id)
-        )
-
-        session = result.scalar_one_or_none()
-
-        if not session:
-            return {"error": "Invalid session"}
-
-        result = await db.execute(
             select(SavedRecipe)
-            .where(SavedRecipe.user_id == session.user_id)
+            .where(SavedRecipe.user_id == user.id)
             .order_by(SavedRecipe.created_at.desc())
         )
 
@@ -441,31 +451,27 @@ async def get_saved_recipes(
 @app.delete("/recipes/saved/{recipe_id}")
 async def delete_saved_recipe(
     recipe_id: int,
-    session_id: str | None = Cookie(default=None)
+    user : User = Depends(get_authenticated_user)
 ):
-    if not session_id:
-        return {"error": "Not authenticated"}
+    
 
     async with SessionLocal() as db:
-        result = await db.execute(
-            select(Session).where(Session.id == session_id)
-        )
-        session = result.scalar_one_or_none()
 
-        if not session:
-            return {"error": "Invalid session"}
 
         result = await db.execute(
             select(SavedRecipe)
             .where(
                 SavedRecipe.id == recipe_id,
-                SavedRecipe.user_id == session.user_id
+                SavedRecipe.user_id == user.id
             )
         )
         saved_recipe = result.scalar_one_or_none()
 
         if not saved_recipe:
-            return {"error": "Saved recipe not found"}
+            raise HTTPException(
+                status_code=404,
+                detail="Recipe Not found"
+            )
 
         await db.delete(saved_recipe)
         await db.commit()
