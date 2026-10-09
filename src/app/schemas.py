@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import Literal 
 
 
@@ -69,3 +69,9 @@ class RecipeResponse(BaseModel):
 
     recipes: list[Recipe] = Field(min_length=1,max_length=2)
     message: str | None
+
+# AUTH SCHEMAS 
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str    

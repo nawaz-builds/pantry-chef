@@ -1,6 +1,6 @@
-from fastapi import FastAPI 
+from fastapi import FastAPI , HTTPException
 from fastapi import File, UploadFile, Form 
-from src.app.schemas import RecipeRequest, RecipeIngredient, Recipe, RecipeResponse , DetectedIngredients
+from src.app.schemas import RecipeRequest, RecipeIngredient, Recipe, RecipeResponse , DetectedIngredients, UserRegister
 from dotenv import load_dotenv 
 import os 
 from groq import Groq 
@@ -16,6 +16,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import Response
 from fastapi import Cookie 
+from sqlalchemy.exc import IntegrityError
 from app.prompts import SYSTEM_PROMPT, build_user_prompt, validate_recipes, parse_blocked
 
 load_dotenv() 
@@ -203,27 +204,47 @@ async def generate_recipe(
 
 
 
-@app.post("/auth/register")
-async def register(email: str = Form(...),
-                    password: str = Form(...)
-                    ):
-    async with SessionLocal() as db:
-        result = await db.execute(
-            select(User).where(User.email == email)
+@app.post("/auth/register", status_code=201)
+async def register(data: UserRegister):
+    email = str(data.email).lower()
+
+    if len(data.password) < 8:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must be at least 8 characters"
         )
 
-        existing_user = result.scalar_one_or_none()
+    async with SessionLocal() as db:
+        existing = (
+            await db.execute(
+                select(User).where(User.email == email)
+            )
+        ).scalar_one_or_none()
 
-        if existing_user:
-            return {"error": "Email already registered"}
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail="Email already registered"
+            )
 
         user = User(
             email=email,
-            password_hash=hash_password(password)
+            password_hash=hash_password(data.password)
         )
 
         db.add(user)
-        await db.commit()
+
+        try:
+            await db.commit()
+
+        except IntegrityError:
+            await db.rollback()
+
+            raise HTTPException(
+                status_code=409,
+                detail="Email already registered"
+            )
+
         await db.refresh(user)
 
         return {

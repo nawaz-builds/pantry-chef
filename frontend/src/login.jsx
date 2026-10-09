@@ -35,7 +35,7 @@ function Login({ onLogin }) {
           return;
         }
 
-        const data = await register(email, password);
+        const data = await register(email.trim(), password);
 
         if (data.error) {
           setError(data.error);
@@ -66,8 +66,14 @@ function Login({ onLogin }) {
         setError("Login succeeded, but user verification failed.");
       }
     } catch (error) {
-      console.error(error);
-      setError("Unable to connect to the server.");
+      console.error("Registration error:", error);
+
+      const message =
+        typeof error.message === "string"
+          ? error.message
+          : "Something went wrong. Please try again.";
+
+      setError(message);
     } finally {
       setLoading(false);
     }

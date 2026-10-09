@@ -20,15 +20,36 @@ export async function register(email, password) {
   const response = await fetch(`${API_URL}/auth/register`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
     },
-    body: new URLSearchParams({
+    credentials: "include",
+    body: JSON.stringify({
       email,
       password,
     }),
   });
 
-  return response.json();
+  const data = await response.json();
+
+  if (!response.ok) {
+  const detail = data.detail;
+
+  let message = "Registration failed. Please try again.";
+
+  if (typeof detail === "string") {
+    message = detail;
+  } else if (Array.isArray(detail)) {
+    message = detail
+      .map((item) => item.msg || JSON.stringify(item))
+      .join(", ");
+  } else if (detail && typeof detail === "object") {
+    message = detail.message || JSON.stringify(detail);
+  }
+
+  throw new Error(message);
+ }
+
+  return data;
 }
 
 export async function getCurrentUser() {
