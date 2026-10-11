@@ -165,9 +165,6 @@ pantry-chef/
 
 - [ ] Rate limiting (per-user and per-IP), upload size and magic-byte validation
 - [ ] CSRF protection (Origin check or double-submit token)
-- [ ] Return proper HTTP status codes (`401`/`404`) instead of `200` + `{"error": ...}`
-- [ ] Extract session lookup into a single FastAPI dependency
-- [ ] Non-blocking LLM calls (async Groq client or threadpool)
 - [ ] Tests for `validate_recipes()` and for cross-user access on saved recipes
 - [ ] CI (lint + tests)
 - [ ] Evaluation set for ingredient detection accuracy
